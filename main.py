@@ -1,14 +1,20 @@
+# %%
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import json
 import time
-import glob
+from urllib3.exceptions import InsecureRequestWarning
+import warnings
 import os
+
+warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
+
+# %%
 
 
 def fetch_apex_data(
-    base_url="http://190.107.120.16:8080/apex/wwv_flow.show", start_row=1, max_rows=100
+    base_url="http://190.107.120.16:8080/apex/wwv_flow.show", start_row=1, max_rows=50
 ):
     headers = {
         "Accept": "*/*",
@@ -19,7 +25,6 @@ def fetch_apex_data(
         "DNT": "1",
         "Origin": "http://190.107.120.16:8080",
         "Referer": "http://190.107.120.16:8080/apex/f?p=104:3005:::NO:3005:F104_E1D_POLICY,P3005_TIPO:E1D,ORD",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     }
 
     data = {
@@ -27,7 +32,7 @@ def fetch_apex_data(
         "p_instance": "8105332068485",
         "p_flow_id": "104",
         "p_flow_step_id": "3005",
-        "p_widget_num_return": "25",
+        "p_widget_num_return": max_rows,
         "p_widget_name": "worksheet",
         "p_widget_mod": "ACTION",
         "p_widget_action": "PAGE",
@@ -46,20 +51,58 @@ def fetch_apex_data(
 
 
 def parse_table_data(html_content):
-    """Parse the HTML response and extract table data"""
+    """Parse the HTML response and extract table data with URLs"""
     try:
         soup = BeautifulSoup(html_content, "html.parser")
-        table = soup.find("table")
-        if table:
-            df = pd.read_html(str(table))[0]
+        outer_table = soup.find("table")
+
+        if not outer_table:
+            print("No outer table found")
+            return None
+
+        inner_table = outer_table.find("table")
+        if not inner_table:
+            print("No inner table found")
+            return None
+
+        # Extract data from rows
+        rows_data = []
+        for row in inner_table.find_all("tr", class_=["odd", "even"]):
+            row_dict = {}
+
+            # Get all td elements
+            tds = row.find_all("td")
+            if len(tds) >= 5:  # Ensure we have all expected columns
+                # Extract link from last td
+                last_td = tds[-1]
+                link_tag = last_td.find("a")
+                if link_tag and "href" in link_tag.attrs:
+                    row_dict["document_url"] = (
+                        "http://190.107.120.16:8080/apex/" + link_tag["href"]
+                    )
+                else:
+                    row_dict["document_url"] = ""
+
+                # Extract other columns
+                row_dict["year"] = tds[1].get_text(strip=True)
+                row_dict["number"] = tds[2].get_text(strip=True)
+                row_dict["extract"] = tds[3].get_text(strip=True)
+
+            if row_dict:
+                rows_data.append(row_dict)
+
+        # Convert to DataFrame
+        if rows_data:
+            df = pd.DataFrame(rows_data)
             return df
+
         return None
     except Exception as e:
         print(f"Error parsing table: {str(e)}")
         return None
 
 
-def scrape_and_save_pages(max_rows=100, output_dir="page_data"):
+def scrape_and_save_pages(max_rows=50, output_dir="page_data"):
     """Scrape pages and save each to a separate CSV file"""
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -124,19 +167,17 @@ def combine_csv_files(file_list, output_file="combined_data.csv"):
     return None
 
 
-if __name__ == "__main__":
-    # Suppress SSL warnings
-    from urllib3.exceptions import InsecureRequestWarning
-    import warnings
+# %%
 
-    warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-    # Create directory for individual page files
-    output_dir = "page_data"
+# Create directory for individual page files
+output_dir = "page_data"
 
-    # Scrape and save individual pages
-    saved_files = scrape_and_save_pages(max_rows=100, output_dir=output_dir)
+# Scrape and save individual pages
+saved_files = scrape_and_save_pages(max_rows=50, output_dir=output_dir)
 
-    # Combine all pages into a single file
-    if saved_files:
-        combine_csv_files(saved_files, "combined_data.csv")
+# Combine all pages into a single file
+if saved_files:
+    combine_csv_files(saved_files, "combined_data.csv")
+
+# %%
